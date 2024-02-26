@@ -1,6 +1,9 @@
 #!/bin/bash
 
-# TODO 离线环境需要安装 iptables
+###############################################################
+
+OS_DEV=""
+PKG_MANAGER=""
 
 ###############################################################
 
@@ -9,40 +12,45 @@ FAST_INSTALL=false
 
 ###############################################################
 
-DOCKER_URL="https://get.docker.com"
+readonly DOCKER_URL="https://get.docker.com"
 DOCKER_INSTALLED=false
 DOCKER_NOT_INSTALL=true
 TRY_RERUN_DOCKER=1
 
-DOCKER_PKG=./lib/docker.tgz
-DOCKER_COMPSOE=./lib/docker-compose
+readonly DOCKER_PKG=./lib/docker.tgz
+readonly DOCKER_COMPSOE_DEBIAN=docker-compose-plugin_2.24.5-1~ubuntu.22.04~jammy_amd64.deb
+readonly DOCKER_COMPSOE_RHEL=docker-compose-plugin-2.24.5-1.el8.x86_64.rpm
 
 ###############################################################
 
-MYSQL_CONTAINER_NAME=mysql
-MYSQL_TAG="5.7.44"
+readonly MYSQL_CONTAINER_NAME=mysql
+readonly MYSQL_TAG="5.7.44"
 MYSQL_PORT=3306
 MYSQL_ROOT_PASSWORD="123456" # IMPORTANT!!! Empty password before push to network
 
-MYSQL_LOCAL_CNF=my.cnf
-MYSQL_CNF=/etc/my.cnf
-MYSQL_DIR=/var/lib/mysql # mysql binlog also store in /var/lib/mysql
+readonly MYSQL_LOAD_FILE=mysql-5.7.44.tar
+
+readonly MYSQL_LOCAL_CNF=my.cnf
+readonly MYSQL_CNF=/etc/my.cnf
+readonly MYSQL_DIR=/var/lib/mysql # mysql binlog also store in /var/lib/mysql
 
 ###############################################################
 
-NGINX_CONTAINER_NAME=nginx
-NGINX_TAG="latest"
+readonly NGINX_CONTAINER_NAME=nginx
+readonly NGINX_TAG="latest"
 NGINX_PORT=80
 
-NGINX_HTML_DIR=/opt/app/client # for html
+readonly NGINX_LOAD_FILE=nginx.tar
+
+readonly NGINX_HTML_DIR=/opt/app/client # for html
 # NGINX_STATIC_DIR=/opt/app/client/static # static 目录直接放在 /opt/app/client/static
-NGINX_LOG_DIR=/opt/app/client/nginx-logs # for logs
+readonly NGINX_LOG_DIR=/opt/app/client/nginx-logs # for logs
 
-NGINX_CONF=nginx.conf
-NGINX_CUSTOM_CONF=custom.conf
+readonly NGINX_CONF=nginx.conf
+readonly NGINX_CUSTOM_CONF=custom.conf
 
-NGINX_CONF_PATH=/opt/app/client/nginx.conf
-NGINX_CUSTOM_CONF_PATH=/opt/app/client/custom.conf
+readonly NGINX_CONF_PATH=/opt/app/client/nginx.conf
+readonly NGINX_CUSTOM_CONF_PATH=/opt/app/client/custom.conf
 
 NGINX_EXPORT_PORT=""
 
@@ -51,8 +59,19 @@ NGINX_EXPORT_PORT=""
 mysql_deploy() {
 	echo "### MySQL deploying ###"
 
+	if [[ $RUNNING_MODE = 'off' ]]; then
+		echo "### Running on offline mode, loading mysql image"
+		docker load -i ./docker-imgs/$MYSQL_LOAD_FILE
+
+		local MYSQL_LOAD_RES=$?
+		if [[ $MYSQL_LOAD_RES -ne 0 ]]; then
+			echo "[ERROR] mysql load failed"
+			exit 1
+		fi
+	fi
+
 	# clean relavent docker container
-	CONTAINER_EXIST=$(docker ps -aqf "name=$MYSQL_CONTAINER_NAME")
+	local CONTAINER_EXIST=$(docker ps -aqf "name=$MYSQL_CONTAINER_NAME")
 	if [[ $CONTAINER_EXIST ]] && [[ -n $CONTAINER_EXIST ]]; then
 		echo "Stop and remove stale container"
 		docker stop $MYSQL_CONTAINER_NAME && docker rm $MYSQL_CONTAINER_NAME > /dev/null
@@ -80,8 +99,9 @@ mysql_deploy() {
 
 	# MySQL 5.7 container high memory usage: https://github.com/docker-library/mysql/issues/579
 	# how to solve? add --ulimit nofile=262144:262144 when running container
-	MYSQL_DOCKER_CMD="docker run \
+	local MYSQL_DOCKER_CMD="docker run \
 					--name=$MYSQL_CONTAINER_NAME -d \
+					--restart always \
 					-p $MYSQL_PORT:3306 \
 					-e MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD \
 					-v $MYSQL_CNF:$MYSQL_CNF \
@@ -94,8 +114,8 @@ mysql_deploy() {
 	echo ""
 
 	echo "### Executing Docker command..."
-	MYSQL_CONTAINER_ID=$($MYSQL_DOCKER_CMD)
-	MYSQL_IS_RUNNING=$(docker ps -qf "name=$MYSQL_CONTAINER_NAME")
+	local MYSQL_CONTAINER_ID=$($MYSQL_DOCKER_CMD)
+	local MYSQL_IS_RUNNING=$(docker ps -qf "name=$MYSQL_CONTAINER_NAME")
 
 	if [[ $MYSQL_IS_RUNNING ]] && [[ -n $MYSQL_IS_RUNNING ]]; then
 		echo "### MySQL deployed, container id: "
@@ -115,8 +135,19 @@ mysql_deploy() {
 nginx_deploy() {
 	echo "### Nginx deploying ###"
 
+	if [[ $RUNNING_MODE = 'off' ]]; then
+		echo "### Running on offline mode, loading nginx image"
+		docker load -i ./docker-imgs/$NGINX_LOAD_FILE
+
+		local NGINX_LOAD_RES=$?
+		if [[ $NGINX_LOAD_RES -ne 0 ]]; then
+			echo "[ERROR] nginx image load failed"
+			exit 1
+		fi
+	fi
+
 	# clean relavent docker container
-	NGINX_CONTAINER_EXIST=$(docker ps -aqf "name=$NGINX_CONTAINER_NAME")
+	local NGINX_CONTAINER_EXIST=$(docker ps -aqf "name=$NGINX_CONTAINER_NAME")
 	if [[ $NGINX_CONTAINER_EXIST ]] && [[ -n $NGINX_CONTAINER_EXIST ]]; then
 		echo "### Stop and remove stale container"
 		docker stop $NGINX_CONTAINER_NAME && docker rm $NGINX_CONTAINER_NAME > /dev/null
@@ -142,8 +173,9 @@ nginx_deploy() {
 		NGINX_EXPORT_PORT="-p $NGINX_PORT:80"
 	fi
 
-	NGINX_DOCKER_CMD="docker run \
+	local NGINX_DOCKER_CMD="docker run \
 					--name=$NGINX_CONTAINER_NAME -d \
+					--restart always \
 					$NGINX_EXPORT_PORT \
 					-v $NGINX_CONF_PATH:/etc/nginx/nginx.conf \
 					-v $NGINX_CUSTOM_CONF_PATH:/etc/nginx/conf.d/$NGINX_CUSTOM_CONF
@@ -156,9 +188,9 @@ nginx_deploy() {
 	echo ""
 
 	echo "### Executing Docker command..."
-	NGINX_CONTAINER_ID=$($NGINX_DOCKER_CMD)
+	local NGINX_CONTAINER_ID=$($NGINX_DOCKER_CMD)
 
-	NGINX_IS_RUNNING=$(docker ps -qf "name=$NGINX_CONTAINER_NAME")
+	local NGINX_IS_RUNNING=$(docker ps -qf "name=$NGINX_CONTAINER_NAME")
 
 	if [[ $NGINX_IS_RUNNING ]] && [[ -n $NGINX_IS_RUNNING ]]; then
 		echo "### Nginx deployed, container id: "
@@ -176,21 +208,47 @@ nginx_deploy() {
 
 }
 
+iptables_install() {
+	if [[ $PKG_MANAGER = 'dpkg' ]]; then
+    	tar -xf ./lib/iptables.tar && dpkg -i ./iptables/*.deb && rm -rf ./iptables
+
+	elif [[ $PKG_MANAGER = 'yum' ]]; then
+    	tar -xf ./lib/iptables-rhel.tar && yum localinstall -y ./iptables/*.rpm && rm -rf ./iptables
+	fi
+	
+
+	local IPTABLES_EXIST=$(command -v iptables)
+	if [[ -z $IPTABLES_EXIST ]]; then
+		echo "[ERROR] iptables instll failed"
+		exit 1
+	fi
+}
+
 docker_start() {
 	# Prepare Docker environment
-	IPTABLES_EXIST=$(command -v iptables)
+	local IPTABLES_EXIST=$(command -v iptables)
+
 	if [[ -z $IPTABLES_EXIST ]]; then
-		echo "[ERROR] command iptables not found"
-		exit 1
+		echo "[WARNING] command iptables not found, installing"
+		iptables_install
 	fi
 
 	systemctl start docker >/dev/null 2>&1
 
-	DOCKER_START_RES=$?
+	local DOCKER_START_RES=$?
 
 	if [[ $DOCKER_START_RES -ne 0 ]]; then
 		echo "[ERROR] failed to start Docker"
 		exit 1
+	fi
+}
+
+docker_compose_install() {
+	if [[ $PKG_MANAGER = 'dpkg' ]]; then
+		dpkg -i ./lib/$DOCKER_COMPSOE_DEBIAN
+
+	elif [[ $PKG_MANAGER = 'yum' ]]; then
+    	yum localinstall -y ./lib/$DOCKER_COMPSOE_RHEL
 	fi
 }
 
@@ -199,7 +257,7 @@ docker_install_online() {
 	curl -fsSL $DOCKER_URL -o get-docker.sh
 	sh get-docker.sh
 
-	DOCKER_INSTALL_RESULT=$(docker --version)
+	local DOCKER_INSTALL_RESULT=$(docker --version)
 
 	if [[ $DOCKER_INSTALL_RESULT ]]; then
 		DOCKER_NOT_INSTALL=false
@@ -211,16 +269,14 @@ docker_install_online() {
 }
 
 docker_install_offline() {
-	echo "!!!!!! Installing Docker !!!!!!"
-
 	echo "### Extracting Docker package"
-	tar -zxf $DOCKER_PKG && cp docker/* /usr/bin
+	tar -xf $DOCKER_PKG && cp ./docker/* /usr/bin && rm -rf ./docker
 
 	echo "### Adding Docker startup configuration"
 	cp ./config/docker.service /etc/systemd/system
 	chmod +x /etc/systemd/system/docker.service
 
-	DOCKER_INSTALL_RESULT=$(command -v docker)
+	local DOCKER_INSTALL_RESULT=$(command -v docker)
 	if [[ $DOCKER_INSTALL_RESULT ]]; then
 		DOCKER_NOT_INSTALL=false
 		echo "### Docker installed"
@@ -230,16 +286,16 @@ docker_install_offline() {
 	fi
 
 	echo "### Adding docker-compose"
-	cp ./lib/docker-compose /usr/local/bin
-	chmod +x /usr/local/bin/docker-compose
+
+	docker_compose_install
 
 	docker compose >/dev/null 2>&1
-	DOCKER_COMPOSE_RES=$?
+	local DOCKER_COMPOSE_RES=$?
 
 	if [[ $DOCKER_COMPOSE_RES ]] && [[ $DOCKER_COMPOSE_RES -eq 0 ]]; then
 		echo "### Docker compose installed"
 	else
-		echo -e "\n[WARNING] Docker compsoe install failed"
+		echo -e "[WARNING] Docker compsoe install failed\n"
 	fi
 
 	echo "### Starting Docker"
@@ -263,9 +319,22 @@ docker_install() {
 	fi
 }
 
+package_manager_check() {
+	# Which distributed of Linux is this?
+	if which dpkg >/dev/null 2>&1; then
+    	echo "### Debian-like OS"
+    	PKG_MANAGER="dpkg"
+
+	elif which yum >/dev/null 2>&1; then
+	    echo "### CentOS-like OS"
+    	PKG_MANAGER="yum"
+
+	fi
+}
+
 docker_check() {
 	echo "### Checking Docker"
-	DOCKER_INSTALL_RESULT=$(command -v docker)
+	local DOCKER_INSTALL_RESULT=$(command -v docker)
 
 	if [[ $DOCKER_INSTALL_RESULT ]]; then
 		DOCKER_NOT_INSTALL=false
@@ -276,7 +345,7 @@ docker_check() {
 }
 
 warning() {
-	if [[ ! "$FAST_INSTALL" ]]; then
+	if ! "$FAST_INSTALL"; then
 		echo -e "### Before run this script, \
 				\n### Please make sure you already update: \
 				\n## [my.cnf] for MySQL, \
@@ -301,10 +370,10 @@ helps() {
 }
 
 start() {
-	DOCKER_IS_RUNNING=$(systemctl status docker | grep "running")
+	local DOCKER_IS_RUNNING=$(systemctl status docker | grep "running")
 
 	if [[ $DOCKER_IS_RUNNING ]] && [[ -n $DOCKER_IS_RUNNING ]]; then
-		echo "### Docker is running"
+		echo -e "\n***** Docker is running *****\n"
 
 		echo "### Which image do you want to deploy?"
 		echo "### MySQL[1] Nginx[2] Exit[any key]"
@@ -339,19 +408,17 @@ main() {
 	echo "##### IMPORTANT!!! Please run this script with root and install [curl] before running."
 	echo "##### IMPORTANT!!! Make sure [systemctl] command exist."
 
-	echo "### Infrastructure installing"
-
 	warning
 
-	docker_check
+	package_manager_check
 
-	echo "DOCKER_NOT_INSTALL: $DOCKER_NOT_INSTALL"
+	docker_check
 
 	if $DOCKER_NOT_INSTALL; then
 		docker_install
 	fi
 
-	SYS_CTL_EXIST=$(command -v systemctl)
+	local SYS_CTL_EXIST=$(command -v systemctl)
 	if [[ -z $SYS_CTL_EXIST ]]; then
 		echo "[ERROR] command [systemctl] not found"
 		exit 1
@@ -359,6 +426,8 @@ main() {
 
 	start
 }
+
+###############################################################
 
 while getopts ":m:yh" opt_name; do
     case "$opt_name" in
@@ -394,6 +463,7 @@ fi
 
 echo "***** Running mode: $RUNNING_MODE"
 echo "***** Fast install: $FAST_INSTALL"
+echo ""
 
 ###############################################################
 
